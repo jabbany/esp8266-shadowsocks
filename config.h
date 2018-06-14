@@ -1,18 +1,20 @@
 
 /** Below are WiFi configurations **/
-#define SS_MAX_CONNECTIONS 8
+#define SS_MAX_CONNECTIONS 32
 #define SS_SERVER_PORT 8080
 /*
  * SS_ENCRYPTION - Configure what encryption to use
- *  0 - none (DEBUGGING USE ONLY!), IV=0
- *  1 - none (socks5 cleartext, DEBUGGING USE ONLY!), IV=0
- *  2 - reserved, IV=12
- *  3 - chacha20-ietf, IV=12
- *  4 - reserved, IV=16
- *  5 - aes-128-ctr, IV=16
- *  6 - chacha20-ietf-poly1305 (AEAD, experimental)
+ * NOTE: This changes macro behavior!
+ *  0 - none (DEBUGGING USE ONLY!), IV=0, greeting = 0
+ *  1 - none (ss cleartext, DEBUGGING USE ONLY!), IV=0
+ *  2 - none (socks5 cleartext, DEBUGGING USE ONLY!), IV=0
+ *  10 - reserved, IV=12
+ *  11 - chacha20-ietf, IV=12
+ *  12 - chacha20-ietf-poly1305 (AEAD, experimental)
+ *  21 - reserved, IV=16
+ *  22 - aes-128-ctr, IV=16
  */
-#define SS_ENCRYPTION 8
+#define SS_ENCRYPTION 2
 
 #define SS_PRINT_CONFIG 1
 
@@ -25,4 +27,4 @@ const char* wifi_password = "thisisnotyournetwork";
 
 
 /** Below are system configurations **/
-#define BUFFER_SIZE 2048
+#define BUFFER_SIZE 4096

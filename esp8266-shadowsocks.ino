@@ -19,6 +19,36 @@ SSConnection connections[SS_MAX_CONNECTIONS];
 // TODO(safety): This is actually OK since we're single threaded!
 uint8_t buf[BUFFER_SIZE];
 
+#define LOG 0
+#define WARN 1
+#define ERR 2
+
+void s_log(uint8_t type, const __FlashStringHelper* message, uint16_t cid) {
+  if (type == WARN) {
+    Serial.print("WARN: ");
+  } else if (type == ERR) {
+    Serial.print(" ERR: ");
+  } else {
+    Serial.print(" LOG: ");
+  }
+  Serial.print(message);
+  Serial.print(" (");
+  Serial.print(cid);
+  Serial.println(")");
+  Serial.flush();
+}
+
+void r_log(uint8_t i) {
+  Serial.print(" LOG: Connecting to remote ");
+  Serial.print((char*) connections[i].host);
+  Serial.print(":");
+  Serial.print(connections[i].port);
+  Serial.print(" (");
+  Serial.print(i);
+  Serial.println(")");
+  Serial.flush();
+}
+
 void setup() {
   Serial.begin(115200);
   WiFi.mode(WIFI_STA);
@@ -40,9 +70,16 @@ void setup() {
       delay(500);
     }
   }
+  Serial.flush();
 
   server.begin();
   server.setNoDelay(true);
+
+  // Initialize
+  for (i = 0; i < SS_MAX_CONNECTIONS; i++) {
+    connections[i].localState = LOCAL_RESET;
+    connections[i].remoteState = REMOTE_RESET;
+  }
 
   if (SS_PRINT_CONFIG) {
     Serial.print("Shadowsocks Server listening at ");
@@ -52,7 +89,8 @@ void setup() {
   } else {
     Serial.println("Shadowsocks Server is listening");
   }
-  Serial.println("LOG: Awaiting clients");
+  Serial.flush();
+  s_log(LOG, F("Awaiting clients..."), 0);
 }
 
 void pipe(uint8_t i, uint8_t transferDir) {
@@ -69,12 +107,14 @@ void pipe(uint8_t i, uint8_t transferDir) {
     size_t src_size = source.available();
     source.readBytes(buf, src_size);
     target.write(buf, src_size);
+    yield();
   } else {
     size_t src_size = source.available();
     while (src_size > 0) {
-      source.readBytes(buf, min(BUFFER_SIZE, src_size));
-      target.write(buf, min(BUFFER_SIZE, src_size));
-      src_size -= min(BUFFER_SIZE, src_size);
+      source.readBytes(buf, Min(BUFFER_SIZE, src_size));
+      target.write(buf, Min(BUFFER_SIZE, src_size));
+      src_size -= Min(BUFFER_SIZE, src_size);
+      yield();
     }
   }
 }
@@ -84,91 +124,335 @@ void loop() {
   // Event loop, check for new clients
   if (server.hasClient()){
     for (i = 0; i < SS_MAX_CONNECTIONS; i++){
-      if (!local[i] || !local[i].connected()){
+      if (!local[i] || !local[i].connected() || connections[i].localState == LOCAL_RESET){
         if (local[i]) {
           local[i].stop();
         }
         local[i] = server.available();
-        Serial.print("LOG: New connection established at slot ");
-        Serial.println(i);
+        #if SS_ENCRYPTION == 0
+        connections[i].localState = LOCAL_READY;
+        #endif
+        #if SS_ENCRYPTION == 1
+        connections[i].localState = LOCAL_AWAIT_GREETING;
+        #endif
+        #if SS_ENCRYPTION == 2
+        connections[i].localState = LOCAL_AWAIT_GREETING;
+        #endif
+        #if SS_ENCRYPTION >= 10
+        connections[i].localState = LOCAL_AWAIT_IV;
+        #endif
+        s_log(LOG, F("Client connected"), i);
         break;
       }
-      yield();
     }
     // Not enough resources
     if (i >= SS_MAX_CONNECTIONS) {
        WiFiClient newClient = server.available();
        newClient.stop();
-       Serial.println("WARN: Connection rejected. Out of resources.");
+       s_log(WARN, F("Out of resources."), i);
     }
+    yield();
   }
+
   // Event loop
   for(i = 0; i < SS_MAX_CONNECTIONS; i++){
-    if (local[i] && local[i].connected()) {
-      // Check if there's data from local that needs to be sent to remote
-      if (local[i].available()){
-        // There is data being sent to us. Check if we are in forwarding mode
-        if (remote[i].connected()) {
-          if (connections[i].remoteState == REMOTE_CONNECTED) {
-            // Forward all the local stuff to the remote
+    if (local[i] && local[i].connected() && connections[i].localState != LOCAL_RESET) {
+      // Local service is connected
+
+      if (local[i].available()) {
+        // There is data being sent to us
+
+        if (connections[i].localState == LOCAL_COMPLETE) {
+          // We have nothing to negotiate, so forward
+
+          if (connections[i].remoteState == REMOTE_CONNECTED && remote[i].connected()) {
+            // Forward the stuff
+
             pipe(i, 0);
           } else {
-            // Do other stuff. Technically if remote is connected state should be connected
-            connections[i].remoteState = REMOTE_CONNECTED;
+            // Remote state is disconnected, is it really?
+
+            if (remote[i].connected()) {
+              // Inconsistent? Should never happen! Maybe log this
+
+              connections[i].remoteState = REMOTE_CONNECTED;
+              s_log(WARN, F("(BUG) Inconsistent connection state"), i);
+            } else {
+              // Remote was really disconnected. Disconnect from local too
+
+              connections[i].remoteState = REMOTE_RESET;
+              connections[i].localState = LOCAL_RESET;
+              local[i].stop();
+              s_log(WARN, F("Remote closed. Reset Local."), i);
+            }
           }
         } else {
-          if (connections[i].remoteState == REMOTE_RESET) {
-            // Negotiate the remote
-            if (SS_ENCRYPTION == 0) {
-              // Shadow protocol but with no encryption
-              
-            } else if (SS_ENCRYPTION == 1) {
-              // Socks5 protocol
-              
+          // We have more negotiating to do!
+
+          #if SS_ENCRYPTION == 0
+          if (connections[i].localState == LOCAL_READY) {
+            // No remote connection yet
+
+            Serial.println(" LOG: Connecting to static host"); 
+            char* host = "cdn.moe"; // example domain
+            uint16_t port = 80;
+
+            if (!remote[i].connect(host, port)) {
+              // Remote connection failed, disconnect local too
+
+              s_log(WARN, F("Could not establish connection"), i);
+              connections[i].remoteState = REMOTE_RESET;
+              connections[i].localState = LOCAL_RESET;
+
+              local[i].stop();
             } else {
-              char* host = "koukuko.com"; // example domain
-              int port = 80;
-              if (!remote[i].connect(host, port)) {
-                // Remote connection failed, also kill the local
-                Serial.print("WARN: Could not establish connection to");
-                Serial.print(host);
-                Serial.print(":");
-                Serial.println(port);
-                connections[i].remoteState = REMOTE_RESET;
-                local[i].stop();
-              } else {
-                // Print success message, defers sending of any actual data to next round
-                Serial.print("LOG: Successful connection to ");
-                Serial.println(host);
-                connections[i].remoteState = REMOTE_CONNECTED;
+              // Remote connection successful
+
+              s_log(LOG, F("Successful connection"), i);
+              connections[i].remoteState = REMOTE_CONNECTED;
+              connections[i].localState = LOCAL_COMPLETE;
+            }
+          }
+          #endif
+          #if SS_ENCRYPTION == 1
+          if (connections[i].localState == LOCAL_AWAIT_GREETING) {
+            // Await greeting
+
+            s_log(WARN, F("Not implemented"), i);
+            connections[i].localState = LOCAL_RESET;
+
+            local[i].stop();
+          }
+          #endif
+          #if SS_ENCRYPTION == 2
+          if (connections[i].localState == LOCAL_AWAIT_GREETING) {
+            // Haven't seen the greeting yet
+
+            if (local[i].read() == SOCKS_VERSION) {
+              connections[i].localState = LOCAL_AWAIT_AUTH;
+            } else {
+              s_log(WARN, F("SOCKS version fail. Reset."), i);
+              connections[i].localState = LOCAL_RESET;
+
+              local[i].stop();
+            }
+          } else if (connections[i].localState == LOCAL_AWAIT_AUTH) {
+            if (connections[i].authLen == 0) {
+              // We don't know the authentcation header yet, read it
+              // This should never block since we have at least 1 byte available
+
+              connections[i].authLen = local[i].read();
+              if (connections[i].authLen == 0) {
+                // Client screwing with us
+
+                s_log(WARN, F("SOCKS client offered no encryption methods"), i);
+                local[i].write(_socks_auth_fail, 2);
+                local[i].flush();
+
+                // We go back to awaiting for greeting
+                connections[i].localState = LOCAL_AWAIT_GREETING;
+                continue;
               }
             }
-          } else {
-            Serial.println("LOG: Remote closed connection");
-            connections[i].remoteState = REMOTE_RESET;
+            // We definitely have the authentication header
+            while(local[i].available() && connections[i].authLen > 0) {
+              if (local[i].read() == SOCKS_AUTH_NO_AUTHENTICATION) {
+                connections[i].localState = LOCAL_AWAIT_REQ;
+
+                // Tell the client everything is good!
+                local[i].write(_socks_auth_accept_noauth, 2);
+                local[i].flush();
+              }
+              connections[i].authLen -= 1;
+            }
+          } else if (connections[i].localState == LOCAL_AWAIT_REQ) {
+            while(connections[i].authLen > 0 && local[i].available()) {
+              local[i].read(); // Consume the remaining auth stuff
+              connections[i].authLen -= 1;
+            }
+
+            if (local[i].available()) {
+              // Requested connection
+
+              if (local[i].read() != SOCKS_VERSION) {
+                s_log(WARN, F("SOCKS Protocol Error"), i);
+                local[i].write(_socks_error_proto, 10);
+                local[i].flush();
+              } else {
+                connections[i].localState = LOCAL_AWAIT_CMD;
+              }
+            }
+          } else if (connections[i].localState == LOCAL_AWAIT_CMD) {
+            if (local[i].available() < 2) {
+              continue; // Not enough to consume
+            }
+            if (local[i].read() != SOCKS_CMD_TCP) {
+              // Expect command SOCKS_CMD_TCP
+
+              s_log(WARN, F("Unsupported SOCKS command"), i);
+              local[i].write(_socks_error_proto, 10);
+              local[i].flush();
+
+              connections[i].localState = LOCAL_AWAIT_REQ; // Wait for REQ again
+              continue;
+            }
+            if (local[i].read() != 0) {
+              // Expect reserved 0x00
+
+              s_log(WARN, F("SOCKS Protocol Error: Reserved field incorrect"), i);
+              local[i].write(_socks_error_proto, 10);
+              local[i].flush();
+              connections[i].localState = LOCAL_AWAIT_REQ; // Wait for REQ again
+              continue;
+            } else {
+              // Command field OK
+
+              connections[i].localState = LOCAL_AWAIT_ATYP;
+            }
+          } else if (connections[i].localState == LOCAL_AWAIT_ATYP) {
+            connections[i].hostType = local[i].read();
+            if (connections[i].hostType != ADDR_TYPE_IPV4 &&
+              connections[i].hostType != ADDR_TYPE_DOMAIN &&
+              connections[i].hostType != ADDR_TYPE_IPV6) {
+              // Host type not one of the recognized ones
+
+              s_log(WARN, F("SOCKS Protocol Error: Addr Type"), i);
+              local[i].write(_socks_error_proto, 10);
+              local[i].flush();
+              connections[i].localState = LOCAL_AWAIT_REQ;
+              continue;
+            } else {
+              // Setup host field for reading
+              connections[i].hostRead = 0;
+              connections[i].hostLen = 0;
+              connections[i].localState = LOCAL_AWAIT_ADDR;
+            }
+          } else if (connections[i].localState == LOCAL_AWAIT_ADDR) {
+            // Read host address
+
+            if (connections[i].hostLen == 0) {
+              connections[i].hostLen = local[i].read(); // Read the length
+              if (connections[i].hostLen == 0) {
+                s_log(WARN, F("SOCKS Protocol Error: Host Length Zero"), i);
+                local[i].write(_socks_error_proto, 10);
+                local[i].flush();
+                connections[i].localState = LOCAL_AWAIT_REQ;
+                continue;
+              }
+            }
+
+            while(local[i].available() &&
+              connections[i].hostRead < connections[i].hostLen) {
+
+              connections[i].hostRead += 1;
+              connections[i].host[connections[i].hostRead - 1] = local[i].read();
+            }
+            // Close off string
+            connections[i].host[connections[i].hostRead] = 0;
+
+            if (connections[i].hostRead == connections[i].hostLen) {
+              // We've read the host. Last thing is to read the port
+
+              if (local[i].available() >= 2) {
+                // Enough data buffered, read the port
+
+                connections[i].port = local[i].read() * 256 + local[i].read();
+                connections[i].localState = LOCAL_READY;
+                // We actually cannot wait for another round
+              } else {
+                // Not enough data, let's skip this turn
+
+                continue;
+              }
+            }
+          }
+          #endif
+          #if SS_ENCRYPTION >= 10 && SS_ENCRYPTION < 20
+          if (1) {
+          }
+          #endif
+          #if SS_ENCRYPTION >= 20
+          if (1) {
+          }
+          #endif
+          else if (connections[i].localState != LOCAL_READY) {
+            // Unrecognized state.
+
+            s_log(WARN, F("Bad local state. Disconnecting."), i);
+            Serial.println(connections[i].localState);
+            // Don't do anything about remote, it will be culled
+            connections[i].localState = LOCAL_RESET;
+
             local[i].stop();
+          }
+          yield();
+
+          if (connections[i].localState == LOCAL_READY) {
+            r_log(i);
+
+            if (!remote[i].connect(
+              (char*) connections[i].host,
+              connections[i].port)) {
+              // Remote connection failed
+
+              s_log(LOG, F("Host unreachable."), i);
+              local[i].write(_socks_connection_fail, 10);
+              local[i].flush();
+              
+              connections[i].localState = LOCAL_RESET;
+              connections[i].remoteState = REMOTE_RESET;
+              local[i].stop();
+            } else {
+              // Remote connection successful
+
+              s_log(LOG, F("Successful connection"), i);
+              local[i].write(_socks_connection_success, 10);
+              local[i].flush();
+
+              connections[i].remoteState = REMOTE_CONNECTED;
+              connections[i].localState = LOCAL_COMPLETE;
+            }
           }
         }
         // Yield to WiFi
         yield();
       }
 
-      // Check if there's data from remote that needs to be sent to local
       if (remote[i] && remote[i].connected()) {
+        // Remote is connected
+
         if (remote[i].available()) {
-          // Forward any remote content to local
-          pipe(i, 1);
+          // There is data from remote
+
+          if (local[i] && local[i].connected()) {
+            pipe(i, 1);
+          } else {
+            // Local was disconnected, discard data
+
+            s_log(WARN, F("Local closed. Discarding data and resetting."), i);
+            connections[i].localState = LOCAL_RESET;
+            connections[i].remoteState = REMOTE_RESET;
+
+            remote[i].stop();
+          }
 
           // Yield to WiFi
           yield();
         }
       }
     } else {
-      if (remote[i] && remote[i].connected() && connections[i].remoteState != REMOTE_RESET) {
-        remote[i].stop();
+      // The local service is not connected or was disconnected.
+
+      // Update status for local
+      connections[i].localState = LOCAL_RESET;
+
+      if (connections[i].remoteState != REMOTE_RESET && remote[i] && remote[i].connected()) {
+        // There is still an active remote
+
         connections[i].remoteState = REMOTE_RESET;
-        Serial.print("LOG: Local connection was closed. Closing remote ");
-        Serial.println(i);
+        remote[i].stop();
+
+        s_log(LOG, F("Local closed. Reset Remote."), i);
       }
     }
   }
