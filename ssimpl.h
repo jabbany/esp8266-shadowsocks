@@ -6,11 +6,11 @@
 struct SSConnection {
   uint8_t localState;
   uint8_t remoteState;
+  uint8_t hostType;
   uint8_t host[256];
   uint16_t port;
 #if SS_ENCRYPTION == 2
   uint8_t authLen;
-  uint8_t hostType;
   uint8_t hostRead;
   uint8_t hostLen;
 #endif
