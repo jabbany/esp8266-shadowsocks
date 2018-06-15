@@ -23,18 +23,18 @@ void r_log(uint8_t addrType, char* host,uint16_t port, uint8_t i) {
     Serial.print(host);
   } else if (addrType == ADDR_TYPE_IPV4) {
     Serial.print(host[0], DEC);
-    Serial.print(".");
+    Serial.print(F("."));
     Serial.print(host[1], DEC);
-    Serial.print(".");
+    Serial.print(F("."));
     Serial.print(host[2], DEC);
-    Serial.print(".");
+    Serial.print(F("."));
     Serial.print(host[3], DEC);
   }
-  Serial.print(":");
+  Serial.print(F(":"));
   Serial.print(port);
-  Serial.print(" (");
+  Serial.print(F(" ("));
   Serial.print(i);
-  Serial.println(")");
+  Serial.println(F(")"));
   Serial.flush();
 }
 

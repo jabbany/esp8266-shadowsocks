@@ -1,7 +1,7 @@
 #ifndef _CONFIG
 #define _CONFIG
   /** Below are WiFi configurations **/
-  #define SS_MAX_CONNECTIONS 48
+  #define SS_MAX_CONNECTIONS 36
   #define SS_SERVER_PORT 8080
   /*
    * SS_ENCRYPTION - Configure what encryption to use
@@ -18,11 +18,11 @@
   #define SS_ENCRYPTION 2
   #define SS_PRINT_CONFIG 1
   
-  #define WIFI_WAIT_DELAY 500
+  #define WIFI_WAIT_DELAY 1000
   #define WIFI_WAIT_COUNT 24
   
   /** Below are system configurations **/
-  #define BUFFER_SIZE 4096
+  #define BUFFER_SIZE 3072
   #define LIMIT_TO_BUFFER 1
   #define ALWAYS_FLUSH_LOGS 0
 #endif

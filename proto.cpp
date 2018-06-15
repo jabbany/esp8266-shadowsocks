@@ -10,6 +10,7 @@ uint8_t connect_remote (WiFiClient *remote, SSConnection *connection) {
   if (connection->localState != LOCAL_READY) {
     return RC_NOT_READY; // No point in connecting since local was not ready
   }
+  *remote = WiFiClient();
   switch(connection->addrType) {
     case ADDR_TYPE_IPV4:
       byte ip[4];

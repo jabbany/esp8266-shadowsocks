@@ -30,16 +30,16 @@ void setup() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(wifi_ssid, wifi_password);
 
-  Serial.print("\nConnecting to "); 
+  Serial.print(F("\nConnecting to ")); 
   Serial.println(wifi_ssid);
   uint8_t i = 0;
   while (WiFi.status() != WL_CONNECTED && i++ < WIFI_WAIT_COUNT) {
     delay(WIFI_WAIT_DELAY);
-    Serial.print(".");
+    Serial.print(F("."));
   }
-  Serial.println("");
+  Serial.println();
   if(i >= WIFI_WAIT_COUNT){
-    Serial.print("Could not connect! Halting."); 
+    Serial.print(F("Could not connect! Halting.")); 
     while(1) {
       // Halt the device
       delay(500);
